@@ -1,4 +1,5 @@
 import json
+from typing import Dict, Any, List
 
 import requests
 import pandas as pd
@@ -31,7 +32,7 @@ class VRDBExtractor:
             scripts = soup.find_all('script')
 
             for script in scripts:
-                if script.string and '__sveltekit_11vwm6r.resolve' in script.string:
+                if script.string and 'return {id:1' in script.string:
                     return script.string
 
             raise ValueError("Could not find relevant script content")
@@ -40,34 +41,93 @@ class VRDBExtractor:
             raise
 
     def parse_game_data(self, text: str) -> pd.DataFrame:
-        """Regular expressions for capturing required fields"""
-
-        game_pattern = re.compile(
-            r'{\s*id:\s*"(?P<id>\d+)",\s*name:\s*"(?P<name>[^"]+)",.*?'
-            r'genres:\s*(?P<genres>\[.*?\]),\s*rating_score:\s*(?P<rating_score>\d+(\.\d+)?),.*?'
-            r'release_date:\s*"(?P<release_date>[^"]*)",.*?developer:\s*"(?P<developer>[^"]*)",.*?'
-            r'publisher:\s*"(?P<publisher>[^"]*)",.*?platforms:\s*(?P<platforms>\[.*?\]),.*?'
-            r'store_link:\s*"(?P<store_link>[^"]*)".*?}'
-            , re.DOTALL
+        """
+        Parse game data text into a pandas DataFrame with mandatory and optional fields.
+        """
+        # Mandatory fields pattern
+        mandatory_pattern = re.compile(
+            r'{\s*'
+            r'id:\s*"(?P<id>\d+)".*?'
+            r'name:\s*"(?P<name>[^"]+)".*?'
+            r'genres:\s*(?P<genres>\[.*?\])'
+            r'.*?store_link:\s*"(?P<store_link>[^"]*)"'
+            r'.*?}',
+            re.DOTALL
         )
 
-        # Extract games using regex
-        games = []
-        for match in game_pattern.finditer(text):
-            game = {
-                "id": match.group("id"),
-                "name": match.group("name"),
-                "genres": json.loads(match.group("genres")),
-                "rating_score": float(match.group("rating_score")),
-                "release_date": match.group("release_date"),
-                "developer": match.group("developer"),
-                "publisher": match.group("publisher"),
-                "platforms": json.loads(match.group("platforms")),
-                "store_link": match.group("store_link")
-            }
-            games.append(game)
+        # Optional fields patterns
+        optional_patterns = {
+            'developer': r'developer:\s*"(?P<developer>[^"]*)"',
+            'publisher': r'publisher:\s*"(?P<publisher>[^"]*)"',
+            'platforms': r'platforms:\s*(?P<platforms>\[.*?\])',
+            'release_date': r'release_date:\s*"(?P<release_date>[^"]*)"',
+            'rating_score': r'rating_score:\s*(?P<rating_score>\d+(?:\.\d+)?)',
+            'rating_count': r'rating_count:\s*(?P<rating_count>\d+)',
+            'game_mode': r'game_mode:\s*"(?P<game_mode>[^"]*)"',
+            'languages': r'languages:\s*(?P<languages>\[.*?\])',
+            'age_rating': r'age_rating:\s*"(?P<age_rating>[^"]*)"',
+            'space_required': r'space_required:\s*"(?P<space_required>[^"]*)"',
+            'price_USD_amount': r'price_USD_amount:\s*(?P<price_USD_amount>\d+)',
+            'price_USD_formatted': r'price_USD_formatted:\s*"(?P<price_USD_formatted>[^"]*)"'
+        }
 
-        return pd.DataFrame(games)
+        def parse_array_field(field_value: str) -> List[str]:
+            """Parse array fields from string to list"""
+            try:
+                return json.loads(field_value)
+            except json.JSONDecodeError:
+                return []
+
+        def extract_optional_fields(game_text: str) -> Dict[str, Any]:
+            """Extract optional fields from game text"""
+            optional_fields = {}
+
+            for field, pattern in optional_patterns.items():
+                match = re.search(pattern, game_text)
+                if match:
+                    value = match.group(field)
+                    # Handle array fields
+                    if field in ['platforms', 'languages']:
+                        optional_fields[field] = parse_array_field(value)
+                    # Handle numeric fields
+                    elif field in ['rating_score', 'rating_count', 'price_USD_amount']:
+                        try:
+                            optional_fields[field] = float(value) if '.' in value else int(value)
+                        except ValueError:
+                            continue
+                    else:
+                        optional_fields[field] = value
+
+            return optional_fields
+
+        games = []
+        for match in mandatory_pattern.finditer(text):
+            try:
+                game_data = {
+                    "id": match.group("id"),
+                    "name": match.group("name"),
+                    "genres": parse_array_field(match.group("genres")),
+                    "store_link": match.group("store_link")
+                }
+
+                game_text = match.group(0)
+                optional_fields = extract_optional_fields(game_text)
+
+                game_data.update(optional_fields)
+
+                games.append(game_data)
+
+            except (AttributeError, json.JSONDecodeError) as e:
+                print(f"Error parsing game data: {e}")
+                continue
+        df = pd.DataFrame(games)
+
+        mandatory_fields = {'id', 'name', 'genres', 'store_link'}
+        missing_fields = mandatory_fields - set(df.columns)
+        if missing_fields:
+            raise ValueError(f"Missing mandatory fields: {missing_fields}")
+
+        return df
 
     def save_to_excel(self, df: pd.DataFrame, output_file: str) -> None:
         """Save DataFrame to Excel, either creating a new file or appending to an existing one."""
@@ -110,12 +170,3 @@ class VRDBExtractor:
 
         self.save_to_excel(original_df, output_file)
         return output_file
-
-
-if __name__ == "__main__":
-    try:
-        extractor = VRDBExtractor()
-        output_file = extractor.run()
-        print(f"Successfully extracted VR games data to: {output_file}")
-    except Exception as e:
-        print(f"Error: {str(e)}")
