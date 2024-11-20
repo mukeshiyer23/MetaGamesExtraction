@@ -1,25 +1,30 @@
 import os
 import time
+from functools import partial
+from multiprocessing import Pool
+from typing import List, Dict, Any
 
+import numpy as np
 import pandas as pd
-from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.common import NoSuchElementException
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 
-WEB_URL = "https://www.meta.com/experiences/yeeps-hide-and-seek/7276525889052788/?utm_source=vrdb.app"
 # Maximum number of "Show more reviews" clicks
-MAX_SMR_CLICKS = 20
+MAX_SMR_CLICKS = 30
 
 # Sleep Time post "Show more reviews" clicks to let content load
-SMR_SLEEP_TIME = 10
+SMR_SLEEP_TIME = 30
+
+# Determine number of processes (use 1 less than CPU count to avoid overload)
+NUM_PROCESSES = max(os.cpu_count() - 10, 1)
 
 
 class MetaReviewsExtractor:
     def __init__(self):
         self.chrome_options = Options()
-        # self.chrome_options.add_argument('--headless')
+        self.chrome_options.add_argument('--headless')
         self.chrome_options.add_argument('--no-sandbox')
         self.chrome_options.add_argument('--disable-ev-shm-usage')
         self.driver = None
@@ -176,6 +181,66 @@ class MetaReviewsExtractor:
         print(f"Reviews saved to: {file_path}")
 
 
+class ParallelMetaReviewsExtractor:
+    @staticmethod
+    def chunk_dataframe(df: pd.DataFrame, chunks: int) -> List[pd.DataFrame]:
+        """Split dataframe into roughly equal chunks."""
+        return np.array_split(df, chunks)
+
+    @staticmethod
+    def process_chunk(chunk: pd.DataFrame, chunk_id: int) -> List[Dict[str, Any]]:
+        """Process a chunk of the dataframe in a separate process."""
+        meta_extractor = MetaReviewsExtractor()  # Creates new Selenium instance
+        results = []
+        games_processed = 0  # Counter for processed games
+        COOLDOWN_INTERVAL = 10  # Process 10 games before cooling
+        COOLDOWN_DURATION = 1  # Cool down for 60 seconds
+
+        try:
+            print(f"Process {chunk_id} started with {len(chunk)} games")
+
+            for index, row in chunk.iterrows():
+                store_link = row['store_link']
+                print(f"Process {chunk_id} - Processing Game - {row['name']}")
+
+                if not isinstance(store_link, str) or not store_link.strip():
+                    print(f"Process {chunk_id} - Invalid store link at row {index}. Skipping...")
+                    continue
+
+                try:
+                    game_name = store_link.split('/')[-1].split('?')[0]
+                    print(f"Processing Game - {game_name}")
+                    review_file_path = os.path.join(os.path.dirname(__file__), "..", 'Games Reviews',
+                                                    f'{game_name}.xlsx')
+
+                    if os.path.exists(review_file_path):
+                        print(f"Process {chunk_id} - Reviews for {game_name} already exist. Skipping...")
+                        continue
+
+                    reviews = meta_extractor.scrape_reviews(store_link, MAX_SMR_CLICKS)
+                    if reviews:
+                        meta_extractor.save_game_reviews(reviews, game_name)
+                        games_processed += 1  # Increment counter only for successful extractions
+
+                        # Check if we need a cooling period
+                        if games_processed % COOLDOWN_INTERVAL == 0:
+                            print(
+                                f"Process {chunk_id} - Cooling down for {COOLDOWN_DURATION} seconds after processing {COOLDOWN_INTERVAL} games...")
+                            time.sleep(COOLDOWN_DURATION)
+                    else:
+                        print(f"Process {chunk_id} - No reviews found for: {store_link}")
+
+                except Exception as e:
+                    print(f"Process {chunk_id} - Error processing {store_link}: {str(e)}")
+
+        except Exception as e:
+            print(f"Process {chunk_id} encountered an error: {str(e)}")
+        finally:
+            meta_extractor.driver.quit()  # Clean up Selenium driver
+
+        return results
+
+
 if __name__ == '__main__':
     try:
         print("Trying to fetch data from VR_Games_Data.xlsx")
@@ -195,24 +260,20 @@ if __name__ == '__main__':
             print("The required column 'store_link' is missing.")
             exit(1)
 
-        meta_extractor = MetaReviewsExtractor()
+        # Split dataframe into chunks
+        chunks = ParallelMetaReviewsExtractor.chunk_dataframe(games_list_df, NUM_PROCESSES)
 
-        for index, row in games_list_df.iterrows():
-            store_link = row['store_link']
-            print(f"Processing Game - {row['name']}")
-            if not isinstance(store_link, str) or not store_link.strip():
-                print(f"Invalid store link at row {index}. Skipping...")
-                continue
-
-            try:
-                reviews = meta_extractor.scrape_reviews(store_link)
-                if reviews:
-                    game_name = store_link.split('/')[-1].split('?')[0]
-                    meta_extractor.save_game_reviews(reviews, game_name)
-                else:
-                    print(f"No reviews found for the link: {store_link}")
-            except Exception as inner_e:
-                print(f"Error processing link {store_link} - {inner_e}")
+        # Create process pool and process chunks in parallel
+        with Pool(processes=NUM_PROCESSES) as pool:
+            # Create partial function with chunk_id
+            process_chunk_with_id = partial(
+                ParallelMetaReviewsExtractor.process_chunk
+            )
+            # Map chunks to processes with their IDs
+            all_results = pool.starmap(
+                process_chunk_with_id,
+                [(chunk, i) for i, chunk in enumerate(chunks)]
+            )
 
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
