@@ -12,7 +12,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 
 # Maximum number of "Show more reviews" clicks
-MAX_SMR_CLICKS = 30
+MAX_SMR_CLICKS = 1000
 
 # Sleep Time post "Show more reviews" clicks to let content load
 SMR_SLEEP_TIME = 30
