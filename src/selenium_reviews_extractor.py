@@ -17,8 +17,8 @@ MAX_SMR_CLICKS = 30
 # Sleep Time post "Show more reviews" clicks to let content load
 SMR_SLEEP_TIME = 30
 
-# Determine number of processes (use 1 less than CPU count to avoid overload)
-NUM_PROCESSES = max(os.cpu_count() - 10, 1)
+# Determine number of processes
+NUM_PROCESSES = max(os.cpu_count() - 8, 1)
 
 
 class MetaReviewsExtractor:
@@ -194,7 +194,7 @@ class ParallelMetaReviewsExtractor:
         results = []
         games_processed = 0  # Counter for processed games
         COOLDOWN_INTERVAL = 10  # Process 10 games before cooling
-        COOLDOWN_DURATION = 1  # Cool down for 60 seconds
+        COOLDOWN_DURATION = 0  # Cool down for 60 seconds
 
         try:
             print(f"Process {chunk_id} started with {len(chunk)} games")
