@@ -12,19 +12,19 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 
 # Maximum number of "Show more reviews" clicks
-MAX_SMR_CLICKS = 1000
+MAX_SMR_CLICKS = 2000
 
 # Sleep Time post "Show more reviews" clicks to let content load
-SMR_SLEEP_TIME = 30
+SMR_SLEEP_TIME = 15
 
 # Determine number of processes
-NUM_PROCESSES = max(os.cpu_count() - 8, 1)
+NUM_PROCESSES = max(os.cpu_count() - 15, 1)
 
 
 class MetaReviewsExtractor:
     def __init__(self):
         self.chrome_options = Options()
-        self.chrome_options.add_argument('--headless')
+        # self.chrome_options.add_argument('--headless')
         self.chrome_options.add_argument('--no-sandbox')
         self.chrome_options.add_argument('--disable-ev-shm-usage')
         self.driver = None
@@ -149,7 +149,8 @@ class MetaReviewsExtractor:
                 try:
                     show_more_button = self.driver.find_element(
                         By.XPATH,
-                        "//div[contains(@class, 'x78zum5') and contains(@class, 'xl56j7k')]/span[text()='Show more reviews']"
+                        "//div[contains(@class, 'x78zum5') and contains(@class, 'xl56j7k')]/span[text()='Show more "
+                        "reviews']"
                     )
 
                     show_more_button.click()
