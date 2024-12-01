@@ -32,7 +32,7 @@ class VRDBExtractor:
             scripts = soup.find_all('script')
 
             for script in scripts:
-                if script.string and 'return {id:1' in script.string:
+                if script.string and 'resolve({id:1' in script.string:
                     return script.string
 
             raise ValueError("Could not find relevant script content")
@@ -129,15 +129,16 @@ class VRDBExtractor:
 
         return df
 
-    def save_to_excel(self, df: pd.DataFrame, output_file: str) -> None:
-        """Save DataFrame to Excel, either creating a new file or appending to an existing one."""
+    def save_to_files(self, df: pd.DataFrame, excel_output: str, json_output: str) -> None:
+        """Save DataFrame to Excel and JSON files."""
         try:
-
-            with pd.ExcelWriter(output_file, mode='w', engine='openpyxl') as writer:
+            with pd.ExcelWriter(excel_output, mode='w', engine='openpyxl') as writer:
                 df.to_excel(writer, index=False, header=True, sheet_name='VR_Games')
 
+            df.to_json(json_output, orient='records', indent=2)
+
         except Exception as e:
-            logger.error(f"Error saving data to Excel: {str(e)}")
+            logger.error(f"Error saving data to Excel and JSON: {str(e)}")
             raise
 
     def run(self) -> str:
@@ -145,6 +146,7 @@ class VRDBExtractor:
         page = 1
         original_df = pd.DataFrame()
         output_file = "VR_Games_Data.xlsx"
+        output_file_json = "VR_Games_Data.json"
         first_write = True
         while True:
             try:
@@ -168,5 +170,5 @@ class VRDBExtractor:
                 logger.error(f"Error in extraction process on page {page}: {str(e)}")
                 raise
 
-        self.save_to_excel(original_df, output_file)
+        self.save_to_files(original_df, output_file, output_file_json)
         return output_file
