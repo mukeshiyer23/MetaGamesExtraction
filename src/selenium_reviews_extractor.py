@@ -4,12 +4,15 @@ from functools import partial
 from multiprocessing import Pool
 from typing import List, Dict, Any
 
+from bs4 import BeautifulSoup
+from selenium.webdriver.support import expected_conditions as EC
 import numpy as np
 import pandas as pd
 from selenium import webdriver
-from selenium.common import NoSuchElementException
+from selenium.common import NoSuchElementException, TimeoutException
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
+from selenium.webdriver.support.wait import WebDriverWait
 
 # Maximum number of "Show more reviews" clicks
 MAX_SMR_CLICKS = 2000
@@ -125,15 +128,74 @@ class MetaReviewsExtractor:
                 except:
                     author = 'N/A'
 
+            # Extract helpfulness
+            try:
+                helpfulness_element = review_div.find_element(
+                    By.XPATH,
+                    ".//span[contains(@class, 'x16g9bbj') and contains(@class, 'x17gzxuv') and contains(@class, "
+                    "'x1rujz1s') and contains(@class, 'xm5vtmc') and contains(@class, 'x3voqp2') and contains(@class, "
+                    "'x658qfi') and contains(@class, 'x1wsgf3v') and contains(@class, 'xn1wy4v') and contains(@class, "
+                    "'x1k03ns3') and contains(@class, 'xpbi8i2') and contains(@class, 'xh2n1af') and contains(@class, "
+                    "'x1npfmwo') and contains(@class, 'xg94uf4') and contains(@class, 'xrm2kyc') and contains(@class, "
+                    "'xjprkx4') and contains(@class, 'xawl3gl') and contains(@class, 'x12429cg') and contains(@class, "
+                    "'x6tc29j') and contains(@class, 'xbq7h4v') and contains(@class, 'x6jdkww') and contains(@class, "
+                    "'xq9mrsl')]"
+                )
+                helpfulness = helpfulness_element.text
+            except:
+                try:
+                    helpfulness = review_div.text.split('\n')[3]
+                except:
+                    helpfulness = 'N/A'
+
             reviews.append({
                 'title': title,
                 'rating': rating,
                 'time': review_time,
                 'content': review_content,
-                'author': author
+                'author': author,
+                'helpful_votes': helpfulness
             })
 
         return reviews
+
+    def extract_game_details(self, data):
+        # Define the keys we want to extract
+        keys_to_extract = [
+            'Game modes', 'Multiplayer', 'Supported player modes',
+            'Supported controllers', 'Supported platforms',
+            'Category', 'Genres', 'Languages', 'Version',
+            'Developer', 'Publisher', 'Website', 'Release date',
+            'Space required', 'Comfort level', 'Internet connection'
+        ]
+
+        # Dictionary to store the extracted details
+        game_details = {}
+
+        # Iterate through the list
+        for i in range(len(data)):
+            # Check if the current item is in our keys to extract
+            if data[i] in keys_to_extract:
+                # If the key exists, add it to the dictionary with its next value
+                if i + 1 < len(data):
+                    game_details[data[i]] = data[i + 1]
+
+        return game_details
+
+    def extract_additional_games_details(self):
+        print("Trying to game details.")
+        target_div = self.driver.find_element(
+            By.XPATH,
+            ".//div[contains(@class, 'x78zum5') and contains(@class, 'x1l7klhg') and contains(@class, 'x1iyjqo2') "
+            "and contains(@class, 'x2lah0s') and contains(@class, 'x1a02dak') and contains(@class, 'xd2bs7b') and "
+            "contains(@class, 'x5bj0eh') and contains(@class, 'x1sje56t') and contains(@class, 'x2b88hg') and "
+            "contains(@class, 'x17tu2g0') and contains(@class, 'xnjo89n') and contains(@class, 'xo2o5nc') and "
+            "contains(@class, 'xv9pgs7') and contains(@class, 'xjfzuef')]"
+        )
+        data = target_div.text.split('\n')
+        result = self.extract_game_details(data)
+
+        return result
 
     def scrape_reviews(self, url, MAX_SMR_CLICKS=5):
         self.start_driver()
@@ -144,6 +206,7 @@ class MetaReviewsExtractor:
         reviews = []
 
         try:
+            additional_game_details = self.extract_additional_games_details()
             # Loop to click "Show more reviews" button
             while click_counts <= MAX_SMR_CLICKS:
                 try:
@@ -164,6 +227,7 @@ class MetaReviewsExtractor:
                     break
 
             reviews = self.extract_reviews()
+
             print(f"Reviews Extracted - {len(reviews)}")
         except Exception as e:
             print(f"Exception while scraping: {e}")
@@ -214,9 +278,9 @@ class ParallelMetaReviewsExtractor:
                     review_file_path = os.path.join(os.path.dirname(__file__), "..", 'Games Reviews',
                                                     f'{game_name}.xlsx')
 
-                    if os.path.exists(review_file_path):
-                        print(f"Process {chunk_id} - Reviews for {game_name} already exist. Skipping...")
-                        continue
+                    # if os.path.exists(review_file_path):
+                    #     print(f"Process {chunk_id} - Reviews for {game_name} already exist. Skipping...")
+                    #     continue
 
                     reviews = meta_extractor.scrape_reviews(store_link, MAX_SMR_CLICKS)
                     if reviews:
