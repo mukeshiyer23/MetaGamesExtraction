@@ -21,7 +21,7 @@ MAX_SMR_CLICKS = 2000
 SMR_SLEEP_TIME = 15
 
 # Determine number of processes
-NUM_PROCESSES = max(os.cpu_count() - 15, 1)
+NUM_PROCESSES = max(os.cpu_count() - 10, 1)
 
 
 class MetaReviewsExtractor:
@@ -132,12 +132,12 @@ class MetaReviewsExtractor:
             try:
                 helpfulness_element = review_div.find_element(
                     By.XPATH,
-                    ".//span[contains(@class, 'x16g9bbj') and contains(@class, 'x17gzxuv') and contains(@class, "
-                    "'x1rujz1s') and contains(@class, 'xm5vtmc') and contains(@class, 'x3voqp2') and contains(@class, "
+                    ".//span[contains(@class, 'x1heor9g') and contains(@class, 'x17gzxuv') and contains(@class, "
+                    "'x1rujz1s') and contains(@class, 'xex5isp') and contains(@class, 'xsp84uj') and contains(@class, "
                     "'x658qfi') and contains(@class, 'x1wsgf3v') and contains(@class, 'xn1wy4v') and contains(@class, "
-                    "'x1k03ns3') and contains(@class, 'xpbi8i2') and contains(@class, 'xh2n1af') and contains(@class, "
-                    "'x1npfmwo') and contains(@class, 'xg94uf4') and contains(@class, 'xrm2kyc') and contains(@class, "
-                    "'xjprkx4') and contains(@class, 'xawl3gl') and contains(@class, 'x12429cg') and contains(@class, "
+                    "'xby3lk6') and contains(@class, 'xcxolhg') and contains(@class, 'xh2n1af') and contains(@class, "
+                    "'x1npfmwo') and contains(@class, 'xg94uf4') and contains(@class, 'x1yyhlu9') and contains(@class, "
+                    "'x1i6xp69') and contains(@class, 'xawl3gl') and contains(@class, 'x12429cg') and contains(@class, "
                     "'x6tc29j') and contains(@class, 'xbq7h4v') and contains(@class, 'x6jdkww') and contains(@class, "
                     "'xq9mrsl')]"
                 )
@@ -159,7 +159,7 @@ class MetaReviewsExtractor:
 
         return reviews
 
-    def extract_game_details(self, data):
+    def extract_ad(self, data):
         # Define the keys we want to extract
         keys_to_extract = [
             'Game modes', 'Multiplayer', 'Supported player modes',
@@ -193,9 +193,42 @@ class MetaReviewsExtractor:
             "contains(@class, 'xv9pgs7') and contains(@class, 'xjfzuef')]"
         )
         data = target_div.text.split('\n')
-        result = self.extract_game_details(data)
+        result = self.extract_ad(data)
 
         return result
+
+    def extract_pegi_rating(self):
+        try:
+            return None
+
+        except Exception as e:
+            print(f"Rating extraction failed: {e}")
+            return None
+
+    def extract_descriptions(self):
+        try:
+            show_more_button = self.driver.find_element(
+                By.XPATH,
+                "//div[@role='button' and contains(@class, 'x1i10hfl') and contains(text(), 'more...')]"
+            )
+
+            show_more_button.click()
+            print("Clicked 'more' button.")
+        except Exception as e:
+            print(f"'More' button not found or could not be clicked: {e}")
+
+        try:
+            target_div = self.driver.find_element(
+                By.XPATH,
+                ".//div[contains(@class, 'xeuugli') and contains(@class, 'x2lwn1j') and contains(@class, 'x78zum5') "
+                "and contains(@class, 'xdt5ytf') and contains(@class, 'xozqiw3') and contains(@class, 'x3pnbk8')]"
+            )
+            data = target_div.text.split('\n')
+            result = ' '.join(data[:-1])
+            return result
+        except Exception as e:
+            print(f"Target div not found or data extraction failed: {e}")
+            return None
 
     def scrape_reviews(self, url, MAX_SMR_CLICKS=5):
         self.start_driver()
@@ -207,6 +240,11 @@ class MetaReviewsExtractor:
 
         try:
             additional_game_details = self.extract_additional_games_details()
+            description_details = self.extract_descriptions()
+            # pegi_rating = self.extract_pegi_rating()
+
+            ############################# Logic to update the main sheet and json ########################################
+
             # Loop to click "Show more reviews" button
             while click_counts <= MAX_SMR_CLICKS:
                 try:
