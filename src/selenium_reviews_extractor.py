@@ -1,15 +1,15 @@
-import datetime
 import os
 import time
 from functools import partial
 from multiprocessing import Pool
-from selenium.webdriver.support import expected_conditions as EC
 from typing import List, Dict, Any
+from selenium.webdriver.support import expected_conditions as EC
+
 
 import numpy as np
 import pandas as pd
 from selenium import webdriver
-from selenium.common import NoSuchElementException, TimeoutException
+from selenium.common import NoSuchElementException
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.wait import WebDriverWait
@@ -21,7 +21,7 @@ MAX_SMR_CLICKS = 2000
 SMR_SLEEP_TIME = 15
 
 # Determine number of processes
-NUM_PROCESSES = max(os.cpu_count() - 10, 1)
+NUM_PROCESSES = max(os.cpu_count() - 15, 1)
 
 
 class MetaReviewsExtractor:
@@ -42,129 +42,122 @@ class MetaReviewsExtractor:
             self.driver.quit()
 
     def extract_reviews(self):
-        try:
-            print("Trying to extract reviews.")
-            # Locate all review containers with the specified classes
-            review_divs = self.driver.find_elements(
-                By.XPATH,
-                "//div[contains(@class, 'xeuugli') and contains(@class, 'x2lwn1j') and contains(@class, 'x78zum5') and "
-                "contains(@class, 'xdt5ytf') and contains(@class, 'xgpatz3') and contains(@class, 'x40hh3e')]"
-            )
+        print("Trying to extract reviews.")
+        # Locate all review containers with the specified classes
+        review_divs = self.driver.find_elements(
+            By.XPATH,
+            "//div[contains(@class, 'xeuugli') and contains(@class, 'x2lwn1j') and contains(@class, 'x78zum5') and "
+            "contains(@class, 'xdt5ytf') and contains(@class, 'xgpatz3') and contains(@class, 'x40hh3e')]"
+        )
 
-            reviews = []
-            for review_div in review_divs:
-                # Extract title
+        reviews = []
+        for review_div in review_divs:
+            # Extract title
+            try:
+                title_element = review_div.find_element(
+                    By.XPATH,
+                    ".//div[@class='x16g9bbj x17gzxuv xv6bue1 xm5vtmc xsp84uj x1j402mz x1wsgf3v x14imz66 x1k03ns3 "
+                    "xcxolhg xjbavb x1npfmwo x16b4c32 xrm2kyc x1i6xp69 xvyeec0 x12429cg x6tc29j xbq7h4v x6jdkww "
+                    "xq9mrsl']"
+                )
+                title = title_element.text
+            except:
                 try:
-                    title_element = review_div.find_element(
-                        By.XPATH,
-                        ".//div[@class='x16g9bbj x17gzxuv xv6bue1 xm5vtmc xsp84uj x1j402mz x1wsgf3v x14imz66 x1k03ns3 "
-                        "xcxolhg xjbavb x1npfmwo x16b4c32 xrm2kyc x1i6xp69 xvyeec0 x12429cg x6tc29j xbq7h4v x6jdkww "
-                        "xq9mrsl']"
-                    )
-                    title = title_element.text
+                    title = review_div.text.split('\n')[0]
                 except:
-                    try:
-                        title = review_div.text.split('\n')[0]
-                    except:
-                        title = 'N/A'
+                    title = 'N/A'
 
-                # Extract rating (stars)
+            # Extract rating (stars)
+            try:
+                stars_div = review_div.find_element(By.CLASS_NAME, 'x3nfvp2')
+                rating = len(stars_div.find_elements(By.CLASS_NAME, 'xjbqb8w'))
+            except:
+                rating = 0
+
+            # Extract time
+            try:
+                time_element = review_div.find_element(
+                    By.XPATH,
+                    ".//span[contains(@class, 'x16g9bbj') and contains(@class, 'x17gzxuv') and contains(@class, "
+                    "'x3a6nna') and contains(@class, 'xm5vtmc') and contains(@class, 'x1t2x7uc') and contains(@class, "
+                    "'x1o1n6r0') and contains(@class, 'x1wsgf3v') and contains(@class, 'x1c773n9') and contains("
+                    "@class, 'x1k03ns3') and contains(@class, 'xpbi8i2') and contains(@class, 'x9820fh') and "
+                    "contains(@class, 'x1npfmwo') and contains(@class, 'xhj0du5') and contains(@class, 'xrm2kyc') and "
+                    "contains(@class, 'xjprkx4') and contains(@class, 'xlu1awn') and contains(@class, 'x12429cg') and "
+                    "contains(@class, 'x6tc29j') and contains(@class, 'xbq7h4v') and contains(@class, 'x6jdkww') and "
+                    "contains(@class, 'xq9mrsl')]"
+                )
+                review_time = time_element.text
+            except:
                 try:
-                    stars_div = review_div.find_element(By.CLASS_NAME, 'x3nfvp2')
-                    rating = len(stars_div.find_elements(By.CLASS_NAME, 'xjbqb8w'))
-                except:
-                    rating = 0
-
-                # Extract review comments
-                try:
-                    review_element = review_div.find_element(
-                        By.XPATH,
-                        ".//div[@class='x17gzxuv x3a6nna xm5vtmc x1t2x7uc x1o1n6r0 x1wsgf3v x1c773n9 x1k03ns3 xpbi8i2 "
-                        "x9820fh x1npfmwo xhj0du5 xrm2kyc xjprkx4 xlu1awn']"
-                    )
-                    review_content = review_element.text
-                except:
-                    try:
-                        review_content = review_div.text.split('\n')[2]
-                    except:
-                        review_content = 'N/A'
-
-                # Extract author
-                try:
-                    author_element = review_div.find_element(
-                        By.XPATH,
-                        ".//span[contains(@class, 'x16g9bbj') and contains(@class, 'x17gzxuv') and contains(@class, "
-                        "'x1rujz1s') and contains(@class, 'xm5vtmc') and contains(@class, 'x3voqp2') and contains(@class, "
-                        "'x658qfi') and contains(@class, 'x1wsgf3v') and contains(@class, 'xn1wy4v') and contains(@class, "
-                        "'x1k03ns3') and contains(@class, 'xpbi8i2') and contains(@class, 'xh2n1af') and contains(@class, "
-                        "'x1npfmwo') and contains(@class, 'xg94uf4') and contains(@class, 'xrm2kyc') and contains(@class, "
-                        "'xjprkx4') and contains(@class, 'xawl3gl') and contains(@class, 'x12429cg') and contains(@class, "
-                        "'x6tc29j') and contains(@class, 'xbq7h4v') and contains(@class, 'x6jdkww') and contains(@class, "
-                        "'xq9mrsl')]"
-                    )
-                    author = author_element.text
-                except:
-                    try:
-                        author = review_div.text.split('\n')[3]
-                    except:
-                        author = 'N/A'
-
-                # Extract helpfulness
-                try:
-                    helpful_votes_element = review_div.find_element(By.CSS_SELECTOR,
-                                                                    ".x1heor9g.x17gzxuv.x1rujz1s.xex5isp.xsp84uj.x658qfi"
-                                                                    ".x1wsgf3v.xn1wy4v.xby3lk6.xcxolhg.xh2n1af.x1npfmwo"
-                                                                    ".xg94uf4.x1yyhlu9.x1i6xp69.xawl3gl.x12429cg.x6tc29j"
-                                                                    ".xbq7h4v.x6jdkww.xq9mrsl.x1iorvi4.xjkvuk6")
-                    helpfulness = int(helpful_votes_element.text.strip().split()[2])
-                except:
-                    helpfulness = 'N/A'
-
-                try:
-                    time_ago_element = review_div.find_element(By.CSS_SELECTOR,
-                                                               ".x16g9bbj.x17gzxuv.x3a6nna.xm5vtmc.x1t2x7uc.x1o1n6r0.x1wsgf3v"
-                                                               ".x1c773n9.x1k03ns3.xpbi8i2.x9820fh.x1npfmwo.xhj0du5.xrm2kyc"
-                                                               ".xjprkx4.xlu1awn.x12429cg.x6tc29j.xbq7h4v.x6jdkww.xq9mrsl")
-                    time_str = time_ago_element.text.strip()
-
-                    now = datetime.datetime.now()
-
-                    if "ago" in time_str:
-                        if "A" or "An" in time_str:
-                            time_diff = 1
-                        else:
-                            time_diff = int(time_str.split()[0])
-
-                        if "day" in time_str:
-                            past_time = now - datetime.timedelta(days=time_diff)
-                        elif "hour" in time_str:
-                            past_time = now - datetime.timedelta(hours=time_diff)
-
-                        review_time = past_time.strftime('%m-%d-%Y %H:%M')
-
-                    else:
-                        if "," not in time_str:
-                            month_day = time_str.split(" at ")[0]
-                            time_part = time_str.split(" at ")[1]
-                            time_str = f"{month_day}, {now.year} at {time_part}"
-
-                        review_time = datetime.datetime.strptime(time_str, '%b %d, %Y at %I:%M %p').strftime(
-                            '%m-%d-%Y %H:%M')
+                    review_time = review_div.text.split('\n')[1]
                 except:
                     review_time = 'N/A'
 
-                reviews.append({
-                    'title': title,
-                    'rating': rating,
-                    'time': review_time,
-                    'content': review_content,
-                    'author': author,
-                    'helpful_votes': helpfulness
-                })
+            # Extract review comments
+            try:
+                review_element = review_div.find_element(
+                    By.XPATH,
+                    ".//div[@class='x17gzxuv x3a6nna xm5vtmc x1t2x7uc x1o1n6r0 x1wsgf3v x1c773n9 x1k03ns3 xpbi8i2 "
+                    "x9820fh x1npfmwo xhj0du5 xrm2kyc xjprkx4 xlu1awn']"
+                )
+                review_content = review_element.text
+            except:
+                try:
+                    review_content = review_div.text.split('\n')[2]
+                except:
+                    review_content = 'N/A'
 
-            return reviews
-        except Exception as e:
-            return []
+            # Extract author
+            try:
+                author_element = review_div.find_element(
+                    By.XPATH,
+                    ".//span[contains(@class, 'x16g9bbj') and contains(@class, 'x17gzxuv') and contains(@class, "
+                    "'x1rujz1s') and contains(@class, 'xm5vtmc') and contains(@class, 'x3voqp2') and contains(@class, "
+                    "'x658qfi') and contains(@class, 'x1wsgf3v') and contains(@class, 'xn1wy4v') and contains(@class, "
+                    "'x1k03ns3') and contains(@class, 'xpbi8i2') and contains(@class, 'xh2n1af') and contains(@class, "
+                    "'x1npfmwo') and contains(@class, 'xg94uf4') and contains(@class, 'xrm2kyc') and contains(@class, "
+                    "'xjprkx4') and contains(@class, 'xawl3gl') and contains(@class, 'x12429cg') and contains(@class, "
+                    "'x6tc29j') and contains(@class, 'xbq7h4v') and contains(@class, 'x6jdkww') and contains(@class, "
+                    "'xq9mrsl')]"
+                )
+                author = author_element.text
+            except:
+                try:
+                    author = review_div.text.split('\n')[3]
+                except:
+                    author = 'N/A'
+
+            # Extract helpfulness
+            try:
+                helpfulness_element = review_div.find_element(
+                    By.XPATH,
+                    ".//span[contains(@class, 'x1heor9g') and contains(@class, 'x17gzxuv') and contains(@class, "
+                    "'x1rujz1s') and contains(@class, 'xex5isp') and contains(@class, 'xsp84uj') and contains(@class, "
+                    "'x658qfi') and contains(@class, 'x1wsgf3v') and contains(@class, 'xn1wy4v') and contains(@class, "
+                    "'xby3lk6') and contains(@class, 'xcxolhg') and contains(@class, 'xh2n1af') and contains(@class, "
+                    "'x1npfmwo') and contains(@class, 'xg94uf4') and contains(@class, 'x1yyhlu9') and contains(@class, "
+                    "'x1i6xp69') and contains(@class, 'xawl3gl') and contains(@class, 'x12429cg') and contains(@class, "
+                    "'x6tc29j') and contains(@class, 'xbq7h4v') and contains(@class, 'x6jdkww') and contains(@class, "
+                    "'xq9mrsl')]"
+                )
+                helpfulness = helpfulness_element.text
+            except:
+                try:
+                    helpfulness = review_div.text.split('\n')[3]
+                except:
+                    helpfulness = 'N/A'
+
+            reviews.append({
+                'title': title,
+                'rating': rating,
+                'time': review_time,
+                'content': review_content,
+                'author': author,
+                'helpful_votes': helpfulness
+            })
+
+        return reviews
 
     def extract_ad(self, data):
         # Define the keys we want to extract
@@ -190,41 +183,27 @@ class MetaReviewsExtractor:
         return game_details
 
     def extract_additional_games_details(self):
-        try:
-            print("Trying to game details.")
-            target_div = self.driver.find_element(
-                By.XPATH,
-                ".//div[contains(@class, 'x78zum5') and contains(@class, 'x1l7klhg') and contains(@class, 'x1iyjqo2') "
-                "and contains(@class, 'x2lah0s') and contains(@class, 'x1a02dak') and contains(@class, 'xd2bs7b') and "
-                "contains(@class, 'x5bj0eh') and contains(@class, 'x1sje56t') and contains(@class, 'x2b88hg') and "
-                "contains(@class, 'x17tu2g0') and contains(@class, 'xnjo89n') and contains(@class, 'xo2o5nc') and "
-                "contains(@class, 'xv9pgs7') and contains(@class, 'xjfzuef')]"
-            )
-            data = target_div.text.split('\n')
-            result = self.extract_ad(data)
-        except:
-            return {}
-        return result
+        print("Trying to game details.")
+        target_div = self.driver.find_element(
+            By.XPATH,
+            ".//div[contains(@class, 'x78zum5') and contains(@class, 'x1l7klhg') and contains(@class, 'x1iyjqo2') "
+            "and contains(@class, 'x2lah0s') and contains(@class, 'x1a02dak') and contains(@class, 'xd2bs7b') and "
+            "contains(@class, 'x5bj0eh') and contains(@class, 'x1sje56t') and contains(@class, 'x2b88hg') and "
+            "contains(@class, 'x17tu2g0') and contains(@class, 'xnjo89n') and contains(@class, 'xo2o5nc') and "
+            "contains(@class, 'xv9pgs7') and contains(@class, 'xjfzuef')]"
+        )
+        data = target_div.text.split('\n')
+        result = self.extract_ad(data)
 
-    def extract_age_rating(self):
-        try:
-            age_rating_element = self.driver.find_element(
-                By.XPATH,
-                "//span[contains(@class, 'x16g9bbj')]//a[contains(@class, 'x1i10hfl')]"
-            )
-            age_rating = age_rating_element.text.strip()
-            return {'age_rating': age_rating}
-        except Exception as e:
-            print(f"Age rating element not found or extraction failed: {e}")
-            return {}
+        return result
 
     def extract_descriptions(self):
         try:
-            show_more_button = WebDriverWait(self.driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH,
-                                            "//div[@role='button' and contains(@class, 'x1i10hfl') and contains(text("
-                                            "), 'more...')]"))
+            show_more_button = self.driver.find_element(
+                By.XPATH,
+                "//div[@role='button' and contains(@class, 'x1i10hfl') and contains(text(), 'more...')]"
             )
+
             show_more_button.click()
             print("Clicked 'more' button.")
         except Exception as e:
@@ -238,27 +217,22 @@ class MetaReviewsExtractor:
             )
             data = target_div.text.split('\n')
             result = ' '.join(data[:-1])
-            return {'description': result}
+            return result
         except Exception as e:
             print(f"Target div not found or data extraction failed: {e}")
-            return {}
+            return None
 
-    def scrape_reviews(self, url, row, MAX_SMR_CLICKS=5, MAX_RETRIES=5, TIMEOUT=30):
+    def scrape_reviews(self, url, row, MAX_SMR_CLICKS=5):
         self.start_driver()
+        self.driver.get(url)
+        print("Sleeping ...")
+        time.sleep(20)  # Wait for the page to load
+        click_counts = 0
+        reviews = []
 
         try:
-            # Navigate to the page with explicit wait
-            self.driver.get(url)
-
-            # Wait for the page to be in a ready state
-            WebDriverWait(self.driver, TIMEOUT).until(
-                lambda driver: driver.execute_script('return document.readyState') == 'complete'
-            )
-
-            # Additional game details extraction
             additional_game_details = self.extract_additional_games_details()
             description_details = self.extract_descriptions()
-            # age_ratings = self.extract_age_rating()
 
             # Add additional game details to the row
             if additional_game_details:
@@ -272,18 +246,14 @@ class MetaReviewsExtractor:
             # if age_ratings and 'age_rating' in age_ratings:
             #     row.loc['age_rating'] = age_ratings['age_rating']
 
-            # Retry mechanism
-            reviews = []
-            for retry_count in range(MAX_RETRIES):
-                click_counts = 0
-
-                # Loop to click "Show more reviews" button
+            # Loop to click "Show more reviews" button
+            try:
                 while click_counts <= MAX_SMR_CLICKS:
                     try:
-                        # Wait for the "Show more reviews" button to be clickable
                         show_more_button = WebDriverWait(self.driver, 10).until(
                             EC.element_to_be_clickable((By.XPATH,
-                                                        "//div[contains(@class, 'x78zum5') and contains(@class, 'xl56j7k')]/span[text()='Show more reviews']"))
+                                                        "//div[contains(@class, 'x78zum5') and contains(@class, "
+                                                        "'xl56j7k')]/span[text()='Show more reviews']"))
                         )
                         show_more_button.click()
                         print(f"Clicking \"Show more reviews\" Button. Count - {click_counts + 1}")
@@ -293,67 +263,28 @@ class MetaReviewsExtractor:
                     except NoSuchElementException:
                         print("No more 'Show more reviews' buttons found.")
                         break
+                    except Exception as e:
+                        print(f"No more 'Show more reviews' buttons found.")
+                        break
+            except Exception as e:
+                print(f"No more 'Show more reviews' buttons found. - {e}")
 
-                # Extract reviews
-                reviews = self.extract_reviews()
+            reviews = self.extract_reviews()
 
-                print(f"Reviews Extracted - {len(reviews)}")
-
-                # If enough reviews found, break the retry loop
-                if len(reviews) > 25:
-                    break
-
-                # Reload page for next retry
-                print(f"Retry attempt {retry_count + 1}. Reloading page...")
-                self.driver.get(url)
-
-                # Wait for page to load completely
-                WebDriverWait(self.driver, TIMEOUT).until(
-                    lambda driver: driver.execute_script('return document.readyState') == 'complete'
-                )
-
-            # Log URL if still not enough reviews after all retries
-            if len(reviews) <= 25:
-                self.log_url_with_no_reviews(url)
-
-        except Exception as e:
-            print(f"Exception while scraping: {e}")
-            reviews = []
+            print(f"Reviews Extracted - {len(reviews)}")
 
         finally:
             self.close_driver()
 
         return reviews
 
-    def log_url_with_no_reviews(self, url):
-        """
-        Log URLs with no reviews to a text file.
-        Creates the file if it doesn't exist, appends if it does.
-
-        :param url: URL to be logged
-        """
-        try:
-            # Use a consistent filename, potentially as a class attribute or method parameter
-            log_file_path = 'urls_with_no_reviews.txt'
-
-            # Open the file in append mode, create if it doesn't exist
-            with open(log_file_path, 'a') as file:
-                # Write the URL and add a newline
-                file.write(f"{url}\n")
-
-            print(f"URL logged to {log_file_path}")
-
-        except IOError as e:
-            print(f"Error logging URL: {e}")
-
     def save_game_reviews(self, reviews, game_name):
         df = pd.DataFrame(reviews)
         directory_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Games Reviews"))
         os.makedirs(directory_path, exist_ok=True)
-        xlsx_file_path = os.path.join(directory_path, 'xlsx_games_reviews', game_name + '.xlsx')
-        csv_file_path = os.path.join(directory_path, 'csv_games_reviews', f"{game_name}_{len(reviews)}.csv")
-        df.to_excel(xlsx_file_path, index=False)
-        df.to_csv(csv_file_path, index=False)
+        file_path = os.path.join(directory_path, game_name + '.xlsx')
+        df.to_excel(file_path, index=False)
+
         print(f"Reviews saved to: {file_path}")
 
 
@@ -407,19 +338,7 @@ class ParallelMetaReviewsExtractor:
             print(f"Process {chunk_id} encountered an error: {str(e)}")
         finally:
             meta_extractor.driver.quit()  # Clean up Selenium driver
-            # Append the updated chunk to the Excel file
-            try:
-                # Check if file exists
-                if os.path.exists('output.xlsx'):
-                    with pd.ExcelWriter('output.xlsx', engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
-                        chunk.to_excel(writer, index=False, header=False, startrow=writer.sheets['Sheet1'].max_row)
-                else:
-                    # Create a new file if it doesn't exist
-                    chunk.to_excel('output.xlsx', index=False)
 
-                print(f"Process {chunk_id} - Updated data appended to {'output.xlsx'}")
-            except Exception as e:
-                print(f"Process {chunk_id} - Error appending updated data: {str(e)}")
         return results
 
 
