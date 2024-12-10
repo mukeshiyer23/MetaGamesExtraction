@@ -1,10 +1,10 @@
+import json
 import os
 import time
 from functools import partial
 from multiprocessing import Pool
 from typing import List, Dict, Any
 from selenium.webdriver.support import expected_conditions as EC
-
 
 import numpy as np
 import pandas as pd
@@ -21,7 +21,7 @@ MAX_SMR_CLICKS = 2000
 SMR_SLEEP_TIME = 15
 
 # Determine number of processes
-NUM_PROCESSES = max(os.cpu_count() - 15, 1)
+NUM_PROCESSES = max(os.cpu_count() - 9, 1)
 
 
 class MetaReviewsExtractor:
@@ -225,8 +225,12 @@ class MetaReviewsExtractor:
     def scrape_reviews(self, url, row, MAX_SMR_CLICKS=5):
         self.start_driver()
         self.driver.get(url)
-        print("Sleeping ...")
-        time.sleep(20)  # Wait for the page to load
+
+        # Dynamic wait for page load
+        WebDriverWait(self.driver, 30).until(
+            lambda driver: driver.execute_script('return document.readyState') == 'complete'
+        )
+
         click_counts = 0
         reviews = []
 
@@ -243,8 +247,11 @@ class MetaReviewsExtractor:
             if description_details and 'description' in description_details:
                 row.loc['description'] = description_details['description']
 
-            # if age_ratings and 'age_rating' in age_ratings:
-            #     row.loc['age_rating'] = age_ratings['age_rating']
+            game_name = url.split('/')[-1].split('?')[0]
+
+            directory_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Games Reviews"))
+            self.save_to_files(row, os.path.join(directory_path, 'VR_Games_Data.xlsx'),
+                               os.path.join(directory_path, 'VR_Games_Data.json'))
 
             # Loop to click "Show more reviews" button
             try:
@@ -264,29 +271,63 @@ class MetaReviewsExtractor:
                         print("No more 'Show more reviews' buttons found.")
                         break
                     except Exception as e:
-                        print(f"No more 'Show more reviews' buttons found.")
+                        print(f"No more 'Show more reviews' buttons found. - {e}")
                         break
             except Exception as e:
                 print(f"No more 'Show more reviews' buttons found. - {e}")
 
             reviews = self.extract_reviews()
-
             print(f"Reviews Extracted - {len(reviews)}")
 
         finally:
+            # Check for low review count and log
+            if len(reviews) <= 25:
+                with open('skipped_games.txt', 'a') as f:
+                    f.write(f"Skipping game: {game_name}\n")
+
             self.close_driver()
 
         return reviews
+
+    def save_to_files(self, row: pd.Series, excel_output: str, json_output: str) -> None:
+        try:
+            try:
+                existing_df = pd.read_excel(excel_output) if os.path.exists(excel_output) else pd.DataFrame()
+            except Exception:
+                existing_df = pd.DataFrame()
+
+            new_row_df = row.to_frame().T
+
+            if not existing_df.empty:
+                new_row_df = new_row_df.reindex(columns=existing_df.columns)
+
+            combined_df = pd.concat([existing_df, new_row_df], ignore_index=True)
+
+            with pd.ExcelWriter(excel_output, mode='w', engine='openpyxl') as writer:
+                combined_df.to_excel(writer, index=False, header=True, sheet_name='VR_Games')
+
+            try:
+                existing_data = json.load(open(json_output)) if os.path.exists(json_output) else []
+            except Exception:
+                existing_data = []
+
+            existing_data.append(row.to_dict())
+
+            with open(json_output, 'w') as f:
+                json.dump(existing_data, f, indent=2)
+
+        except Exception as e:
+            print(f"Error saving data to Excel and JSON: {str(e)}")
+            raise
 
     def save_game_reviews(self, reviews, game_name):
         df = pd.DataFrame(reviews)
         directory_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Games Reviews"))
         os.makedirs(directory_path, exist_ok=True)
-        file_path = os.path.join(directory_path, game_name + '.xlsx')
-        df.to_excel(file_path, index=False)
-
-        print(f"Reviews saved to: {file_path}")
-
+        xlsx_file_path = os.path.join(directory_path, 'xlsx_games_reviews', game_name + '.xlsx')
+        csv_file_path = os.path.join(directory_path, 'csv_games_reviews', f"{game_name}_{len(reviews)}.csv")
+        df.to_excel(xlsx_file_path, index=False)
+        df.to_csv(csv_file_path, index=False)
 
 class ParallelMetaReviewsExtractor:
     @staticmethod
