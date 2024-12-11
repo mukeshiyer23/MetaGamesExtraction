@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import time
 from functools import partial
 from multiprocessing import Pool
@@ -21,7 +22,7 @@ MAX_SMR_CLICKS = 2000
 SMR_SLEEP_TIME = 15
 
 # Determine number of processes
-NUM_PROCESSES = max(os.cpu_count() - 9, 1)
+NUM_PROCESSES = max(os.cpu_count() - 13, 1)
 
 
 class MetaReviewsExtractor:
@@ -217,10 +218,10 @@ class MetaReviewsExtractor:
             )
             data = target_div.text.split('\n')
             result = ' '.join(data[:-1])
-            return result
+            return {'description':result}
         except Exception as e:
             print(f"Target div not found or data extraction failed: {e}")
-            return None
+            return {}
 
     def scrape_reviews(self, url, row, MAX_SMR_CLICKS=5):
         self.start_driver()
@@ -234,23 +235,26 @@ class MetaReviewsExtractor:
         click_counts = 0
         reviews = []
 
+        game_name = url.split('/')[-1].split('?')[0]
+        directory_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Games Reviews"))
+
         try:
+            time.sleep(5)
             additional_game_details = self.extract_additional_games_details()
             description_details = self.extract_descriptions()
+
+            row_df = pd.DataFrame([row])
 
             # Add additional game details to the row
             if additional_game_details:
                 for key, value in additional_game_details.items():
-                    row.loc[key] = value
+                    row_df[key] = value
 
             # Add description if available
             if description_details and 'description' in description_details:
-                row.loc['description'] = description_details['description']
+                row_df['description'] = description_details['description']
 
-            game_name = url.split('/')[-1].split('?')[0]
-
-            directory_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Games Reviews"))
-            self.save_to_files(row, os.path.join(directory_path, 'VR_Games_Data.xlsx'),
+            self.save_to_files(row_df, os.path.join(directory_path, 'VR_Games_Data.xlsx'),
                                os.path.join(directory_path, 'VR_Games_Data.json'))
 
             # Loop to click "Show more reviews" button
@@ -282,39 +286,43 @@ class MetaReviewsExtractor:
         finally:
             # Check for low review count and log
             if len(reviews) <= 25:
-                with open('skipped_games.txt', 'a') as f:
+                with open(os.path.join(directory_path, 'skipped_games.txt'), 'a') as f:
                     f.write(f"Skipping game: {game_name}\n")
-
+                    reviews = []
             self.close_driver()
 
         return reviews
 
-    def save_to_files(self, row: pd.Series, excel_output: str, json_output: str) -> None:
+    def save_to_files(self, row_df: pd.DataFrame, excel_output: str, json_output: str) -> None:
         try:
             try:
                 existing_df = pd.read_excel(excel_output) if os.path.exists(excel_output) else pd.DataFrame()
             except Exception:
                 existing_df = pd.DataFrame()
 
-            new_row_df = row.to_frame().T
-
             if not existing_df.empty:
-                new_row_df = new_row_df.reindex(columns=existing_df.columns)
+                row_df = row_df.reindex(columns=existing_df.columns)
 
-            combined_df = pd.concat([existing_df, new_row_df], ignore_index=True)
+            combined_df = pd.concat([existing_df, row_df], ignore_index=True)
+
+            # Drop unnecessary columns
+            columns_to_drop = ['genres', 'developer', 'publisher']
+            combined_df = combined_df.drop(columns=[col for col in columns_to_drop if col in combined_df.columns])
+
+            def to_camel_case(s):
+                parts = re.split(r'[_\s]+', s)
+                return parts[0].lower() + ''.join(word.capitalize() for word in parts[1:])
+
+            combined_df.columns = [to_camel_case(col) for col in combined_df.columns]
 
             with pd.ExcelWriter(excel_output, mode='w', engine='openpyxl') as writer:
                 combined_df.to_excel(writer, index=False, header=True, sheet_name='VR_Games')
 
-            try:
-                existing_data = json.load(open(json_output)) if os.path.exists(json_output) else []
-            except Exception:
-                existing_data = []
-
-            existing_data.append(row.to_dict())
+            # Convert the entire combined DataFrame to a list of dictionaries for JSON
+            json_data = combined_df.to_dict(orient='records')
 
             with open(json_output, 'w') as f:
-                json.dump(existing_data, f, indent=2)
+                json.dump(json_data, f, indent=2)
 
         except Exception as e:
             print(f"Error saving data to Excel and JSON: {str(e)}")
@@ -328,6 +336,7 @@ class MetaReviewsExtractor:
         csv_file_path = os.path.join(directory_path, 'csv_games_reviews', f"{game_name}_{len(reviews)}.csv")
         df.to_excel(xlsx_file_path, index=False)
         df.to_csv(csv_file_path, index=False)
+
 
 class ParallelMetaReviewsExtractor:
     @staticmethod
@@ -356,21 +365,46 @@ class ParallelMetaReviewsExtractor:
                     continue
 
                 try:
+                    directory_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Games Reviews"))
+                    vr_games_data_path = os.path.join(directory_path, 'VR_Games_data.xlsx')
+                    skipped_games_path = os.path.join(directory_path, 'skipped_games.txt')
                     game_name = store_link.split('/')[-1].split('?')[0]
-                    print(f"Processing Game - {game_name}")
 
-                    reviews = meta_extractor.scrape_reviews(store_link, row, MAX_SMR_CLICKS)
-                    if reviews:
-                        meta_extractor.save_game_reviews(reviews, game_name)
-                        games_processed += 1  # Increment counter only for successful extractions
+                    def is_game_processed(store_link):
+                        if os.path.exists(vr_games_data_path):
+                            df = pd.read_excel(vr_games_data_path)
 
-                        # Check if we need a cooling period
-                        if games_processed % COOLDOWN_INTERVAL == 0:
-                            print(
-                                f"Process {chunk_id} - Cooling down for {COOLDOWN_DURATION} seconds after processing {COOLDOWN_INTERVAL} games...")
-                            time.sleep(COOLDOWN_DURATION)
+                            if 'store_link' in df.columns and store_link in df['store_link'].values:
+                                print(f"The store link '{store_link}' is already processed.")
+                                return True
+
+                        if os.path.exists(skipped_games_path):
+                            with open(skipped_games_path, 'r') as f:
+                                skipped_games = f.readlines()
+
+                            for line in skipped_games:
+                                if f"Skipping game: {game_name}" in line:
+                                    print(f"The game '{game_name}' is already skipped.")
+                                    return True
+
+                        return False
+
+                    if not is_game_processed(store_link):
+                        print(f"Processing Game - {game_name}")
+
+                        reviews = meta_extractor.scrape_reviews(store_link, row, MAX_SMR_CLICKS)
+                        if len(reviews)>0:
+                            meta_extractor.save_game_reviews(reviews, game_name)
+                            games_processed += 1
+
+                            if games_processed % COOLDOWN_INTERVAL == 0:
+                                print(
+                                    f"Process {chunk_id} - Cooling down for {COOLDOWN_DURATION} seconds after processing {COOLDOWN_INTERVAL} games...")
+                                time.sleep(COOLDOWN_DURATION)
+                        else:
+                            print(f"Process {chunk_id} - No reviews found for: {store_link}")
                     else:
-                        print(f"Process {chunk_id} - No reviews found for: {store_link}")
+                        print(f"Game - {game_name} already processed")
 
                 except Exception as e:
                     print(f"Process {chunk_id} - Error processing {store_link}: {str(e)}")
