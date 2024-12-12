@@ -1,4 +1,5 @@
 import json
+import msvcrt
 import os
 import re
 import time
@@ -218,7 +219,7 @@ class MetaReviewsExtractor:
             )
             data = target_div.text.split('\n')
             result = ' '.join(data[:-1])
-            return {'description':result}
+            return {'description': result}
         except Exception as e:
             print(f"Target div not found or data extraction failed: {e}")
             return {}
@@ -254,8 +255,10 @@ class MetaReviewsExtractor:
             if description_details and 'description' in description_details:
                 row_df['description'] = description_details['description']
 
-            self.save_to_files(row_df, os.path.join(directory_path, 'VR_Games_Data.xlsx'),
-                               os.path.join(directory_path, 'VR_Games_Data.json'))
+            self.save_to_files(row_df, {
+                'excel': os.path.join(directory_path,'games.xlsx'),
+                'json': os.path.join(directory_path,'games.json'),
+            })
 
             # Loop to click "Show more reviews" button
             try:
@@ -286,47 +289,134 @@ class MetaReviewsExtractor:
         finally:
             # Check for low review count and log
             if len(reviews) <= 25:
-                with open(os.path.join(directory_path, 'skipped_games.txt'), 'a') as f:
-                    f.write(f"Skipping game: {game_name}\n")
-                    reviews = []
+                lock_file_path = os.path.join(directory_path, 'skipped_games.txt.lock')
+                skipped_games_path = os.path.join(directory_path, 'skipped_games.txt')
+
+                try:
+                    # Open lock file
+                    with open(lock_file_path, 'w') as lock_file:
+                        try:
+                            # Attempt to lock the file
+                            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+
+                            # Write to skipped games file
+                            with open(skipped_games_path, 'a') as f:
+                                f.write(f"Skipping game: {game_name}\n")
+
+                            # Clear reviews
+                            reviews = []
+
+                        finally:
+                            # Unlock the file
+                            msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+
+                except Exception as e:
+                    print(f"Error writing to skipped games file: {str(e)}")
+
             self.close_driver()
 
         return reviews
 
-    def save_to_files(self, row_df: pd.DataFrame, excel_output: str, json_output: str) -> None:
+    def save_to_files(self, data, output_files: dict) -> None:
+        """
+        Save data to multiple file types with thread-safe file writing
+
+        :param data: DataFrame or dictionary to be saved
+        :param output_files: Dict with file paths and their types
+                             Example: {
+                                 'excel': '/path/to/output.xlsx',
+                                 'json': '/path/to/output.json',
+                             }
+        """
         try:
-            try:
-                existing_df = pd.read_excel(excel_output) if os.path.exists(excel_output) else pd.DataFrame()
-            except Exception:
-                existing_df = pd.DataFrame()
+            for file_path in output_files.values():
+                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
+            first_file_path = list(output_files.values())[0]
+            lock_file_path = first_file_path + '.lock'
+
+            with open(lock_file_path, 'w') as lock_file:
+                try:
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+
+                    for file_type, file_path in output_files.items():
+                        if file_type == 'excel':
+                            self._save_to_excel(data, file_path)
+                        elif file_type == 'json':
+                            self._save_to_json(data, file_path)
+                        else:
+                            raise ValueError(f"Unsupported file type: {file_type}")
+
+                finally:
+                    # Release the lock
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        except Exception as e:
+            print(f"Error saving data to files: {str(e)}")
+            raise
+
+    def _save_to_excel(self, data, file_path):
+        """Save DataFrame to Excel"""
+        try:
+            existing_df = pd.read_excel(file_path) if os.path.exists(file_path) else pd.DataFrame()
 
             if not existing_df.empty:
-                row_df = row_df.reindex(columns=existing_df.columns)
+                data = data.reindex(columns=existing_df.columns)
 
-            combined_df = pd.concat([existing_df, row_df], ignore_index=True)
+            combined_df = pd.concat([existing_df, data], ignore_index=True)
 
-            # Drop unnecessary columns
             columns_to_drop = ['genres', 'developer', 'publisher']
             combined_df = combined_df.drop(columns=[col for col in columns_to_drop if col in combined_df.columns])
 
-            def to_camel_case(s):
-                parts = re.split(r'[_\s]+', s)
-                return parts[0].lower() + ''.join(word.capitalize() for word in parts[1:])
+            combined_df.columns = [self._to_camel_case(col) for col in combined_df.columns]
 
-            combined_df.columns = [to_camel_case(col) for col in combined_df.columns]
-
-            with pd.ExcelWriter(excel_output, mode='w', engine='openpyxl') as writer:
-                combined_df.to_excel(writer, index=False, header=True, sheet_name='VR_Games')
-
-            # Convert the entire combined DataFrame to a list of dictionaries for JSON
-            json_data = combined_df.to_dict(orient='records')
-
-            with open(json_output, 'w') as f:
-                json.dump(json_data, f, indent=2)
+            with pd.ExcelWriter(file_path, mode='w', engine='openpyxl') as writer:
+                combined_df.to_excel(writer, index=False, header=True, sheet_name='Data')
 
         except Exception as e:
-            print(f"Error saving data to Excel and JSON: {str(e)}")
+            print(f"Error saving to Excel: {str(e)}")
             raise
+
+    def _save_to_json(self, data, file_path):
+        """Save DataFrame to JSON"""
+        try:
+            existing_data = []
+            if os.path.exists(file_path):
+                with open(file_path, 'r') as f:
+                    existing_data = json.load(f)
+
+            new_data = data.to_dict(orient='records') if isinstance(data, pd.DataFrame) else data
+
+            combined_data = existing_data + new_data
+
+            with open(file_path, 'w') as f:
+                json.dump(combined_data, f, indent=2)
+
+        except Exception as e:
+            print(f"Error saving to JSON: {str(e)}")
+            raise
+
+    def _save_to_txt(self, data, file_path):
+        """Save data to TXT"""
+        try:
+            if isinstance(data, pd.DataFrame):
+                data_str = data.to_csv(index=False)
+            elif isinstance(data, list):
+                data_str = '\n'.join(str(item) for item in data)
+            else:
+                data_str = str(data)
+
+            mode = 'a' if os.path.exists(file_path) else 'w'
+            with open(file_path, mode) as f:
+                f.write(data_str + '\n')
+
+        except Exception as e:
+            print(f"Error saving to TXT: {str(e)}")
+            raise
+
+    def _to_camel_case(self, s):
+        """Convert string to camelCase"""
+        parts = re.split(r'[_\s]+', s)
+        return parts[0].lower() + ''.join(word.capitalize() for word in parts[1:])
 
     def save_game_reviews(self, reviews, game_name):
         df = pd.DataFrame(reviews)
@@ -393,7 +483,7 @@ class ParallelMetaReviewsExtractor:
                         print(f"Processing Game - {game_name}")
 
                         reviews = meta_extractor.scrape_reviews(store_link, row, MAX_SMR_CLICKS)
-                        if len(reviews)>0:
+                        if len(reviews) > 0:
                             meta_extractor.save_game_reviews(reviews, game_name)
                             games_processed += 1
 
