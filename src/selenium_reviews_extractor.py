@@ -1,4 +1,5 @@
 import json
+import logging
 import msvcrt
 import os
 import re
@@ -23,7 +24,7 @@ MAX_SMR_CLICKS = 2000
 SMR_SLEEP_TIME = 15
 
 # Determine number of processes
-NUM_PROCESSES = max(os.cpu_count() - 13, 1)
+NUM_PROCESSES = max(os.cpu_count() - 9, 1)
 
 
 class MetaReviewsExtractor:
@@ -43,8 +44,10 @@ class MetaReviewsExtractor:
         if self.driver:
             self.driver.quit()
 
-    def extract_reviews(self):
-        print("Trying to extract reviews.")
+    def extract_reviews(self, url):
+        game_id = url.split('/')[-1].split('?')[0]
+        logger = self.setup_logger(game_id)
+        logger.info("Trying to extract reviews.")
         # Locate all review containers with the specified classes
         review_divs = self.driver.find_elements(
             By.XPATH,
@@ -184,8 +187,10 @@ class MetaReviewsExtractor:
 
         return game_details
 
-    def extract_additional_games_details(self):
-        print("Trying to game details.")
+    def extract_additional_games_details(self, url):
+        game_id = url.split('/')[-1].split('?')[0]
+        logger = self.setup_logger(game_id)
+        logger.info("Trying to game details.")
         target_div = self.driver.find_element(
             By.XPATH,
             ".//div[contains(@class, 'x78zum5') and contains(@class, 'x1l7klhg') and contains(@class, 'x1iyjqo2') "
@@ -199,7 +204,9 @@ class MetaReviewsExtractor:
 
         return result
 
-    def extract_descriptions(self):
+    def extract_descriptions(self, url):
+        game_id = url.split('/')[-1].split('?')[0]
+        logger = self.setup_logger(game_id)
         try:
             show_more_button = self.driver.find_element(
                 By.XPATH,
@@ -207,9 +214,9 @@ class MetaReviewsExtractor:
             )
 
             show_more_button.click()
-            print("Clicked 'more' button.")
+            logger.info("Clicked 'more' button.")
         except Exception as e:
-            print(f"'More' button not found or could not be clicked: {e}")
+            logger.info(f"'More' button not found or could not be clicked: {e}")
 
         try:
             target_div = self.driver.find_element(
@@ -221,10 +228,32 @@ class MetaReviewsExtractor:
             result = ' '.join(data[:-1])
             return {'description': result}
         except Exception as e:
-            print(f"Target div not found or data extraction failed: {e}")
+            logger.info(f"Target div not found or data extraction failed: {e}")
             return {}
 
-    def scrape_reviews(self, url, row, MAX_SMR_CLICKS=5):
+    def setup_logger(self,game_id):
+        """Create a logger with a unique identifier for each game"""
+        logger = logging.getLogger(f'game_scraper_{game_id}')
+        logger.setLevel(logging.INFO)
+
+        # Create console handler
+        ch = logging.StreamHandler()
+        ch.setLevel(logging.INFO)
+        formatter = logging.Formatter(f'[%(asctime)s] [{game_id}] - %(message)s')
+        ch.setFormatter(formatter)
+
+        # Clear any existing handlers to prevent duplicate logs
+        logger.handlers.clear()
+        logger.addHandler(ch)
+
+        return logger
+
+    def scrape_reviews(self, url, row, MAX_SMR_CLICKS=500):
+        # Extract game ID for logging
+        game_id = url.split('/')[-1].split('?')[0]
+        logger = self.setup_logger(game_id)
+        retry_count = 0
+
         self.start_driver()
         self.driver.get(url)
 
@@ -235,14 +264,13 @@ class MetaReviewsExtractor:
 
         click_counts = 0
         reviews = []
-
-        game_name = url.split('/')[-1].split('?')[0]
+        batch_count = 0
         directory_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Games Reviews"))
 
         try:
             time.sleep(5)
-            additional_game_details = self.extract_additional_games_details()
-            description_details = self.extract_descriptions()
+            additional_game_details = self.extract_additional_games_details(url)
+            description_details = self.extract_descriptions(url)
 
             row_df = pd.DataFrame([row])
 
@@ -255,9 +283,9 @@ class MetaReviewsExtractor:
             if description_details and 'description' in description_details:
                 row_df['description'] = description_details['description']
 
-            self.save_to_files(row_df, {
-                'excel': os.path.join(directory_path,'games.xlsx'),
-                'json': os.path.join(directory_path,'games.json'),
+            self.save_to_files(row_df, url, {
+                'excel': os.path.join(directory_path, 'games.xlsx'),
+                'json': os.path.join(directory_path, 'games.json'),
             })
 
             # Loop to click "Show more reviews" button
@@ -270,54 +298,82 @@ class MetaReviewsExtractor:
                                                         "'xl56j7k')]/span[text()='Show more reviews']"))
                         )
                         show_more_button.click()
-                        print(f"Clicking \"Show more reviews\" Button. Count - {click_counts + 1}")
+                        logger.info(f"Clicking \"Show more reviews\" Button. Count - {click_counts + 1}")
 
                         click_counts += 1
 
-                    except NoSuchElementException:
-                        print("No more 'Show more reviews' buttons found.")
-                        break
+                        if click_counts == 100:
+                            batch_reviews = self.extract_reviews(url)
+                            click_counts = 0
+                            batch_count += 1
+                            logger.info(f"Resetting click_counts to 0 | batch_count - {batch_count} | Batch Review - {len(batch_reviews)} ")
+
+                            if len(batch_reviews) > len(reviews):
+                                reviews = batch_reviews
+
                     except Exception as e:
-                        print(f"No more 'Show more reviews' buttons found. - {e}")
+                        logger.info(f"No more 'Show more reviews' buttons found.")
+                        logger.info("Retrying.. ") if retry_count < 5 else logger.info("Already retried 5 times")
+                        while retry_count < 5:
+                            try:
+                                time.sleep(15)
+                                show_more_button = WebDriverWait(self.driver, 10).until(
+                                    EC.element_to_be_clickable((By.XPATH,
+                                                                "//div[contains(@class, 'x78zum5') and contains(@class,"
+                                                                "'xl56j7k')]/span[text()='Show more reviews']"))
+                                )
+                                show_more_button.click()
+                                logger.info(f"Clicking \"Show more reviews\" Button. Count - {click_counts + 1} Retry Count - {retry_count}")
+
+                                click_counts += 1
+
+                                if click_counts == 100:
+                                    batch_reviews = self.extract_reviews(url)
+                                    click_counts = 0
+                                    batch_count += 1
+                                    logger.info(
+                                        f"Resetting click_counts to 0 | batch_count - {batch_count} | Batch Review - {len(batch_reviews)} ")
+
+                                    if len(batch_reviews) > len(reviews):
+                                        reviews = batch_reviews
+
+                            except Exception as e:
+                                retry_count += 1
                         break
             except Exception as e:
-                print(f"No more 'Show more reviews' buttons found. - {e}")
+                logger.info(f"No more 'Show more reviews' buttons found. - {e}")
 
-            reviews = self.extract_reviews()
-            print(f"Reviews Extracted - {len(reviews)}")
+            if len(reviews) == 0:
+                reviews = self.extract_reviews(url)
+
+            logger.info(f"Total Reviews Extracted - {len(reviews)}")
 
         finally:
-            # Check for low review count and log
+            # Handling low review count
             if len(reviews) <= 25:
                 lock_file_path = os.path.join(directory_path, 'skipped_games.txt.lock')
                 skipped_games_path = os.path.join(directory_path, 'skipped_games.txt')
-
                 try:
-                    # Open lock file
                     with open(lock_file_path, 'w') as lock_file:
                         try:
-                            # Attempt to lock the file
                             msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
 
-                            # Write to skipped games file
                             with open(skipped_games_path, 'a') as f:
-                                f.write(f"Skipping game: {game_name}\n")
+                                f.write(f"Skipping game: {game_id} (Reviews: {len(reviews)})\n")
 
-                            # Clear reviews
                             reviews = []
 
                         finally:
-                            # Unlock the file
                             msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
 
                 except Exception as e:
-                    print(f"Error writing to skipped games file: {str(e)}")
+                    logger.error(f"Error writing to skipped games file: {str(e)}")
 
             self.close_driver()
 
         return reviews
 
-    def save_to_files(self, data, output_files: dict) -> None:
+    def save_to_files(self, data, url, output_files: dict) -> None:
         """
         Save data to multiple file types with thread-safe file writing
 
@@ -328,6 +384,10 @@ class MetaReviewsExtractor:
                                  'json': '/path/to/output.json',
                              }
         """
+
+
+        game_id = url.split('/')[-1].split('?')[0]
+        logger = self.setup_logger(game_id)
         try:
             for file_path in output_files.values():
                 os.makedirs(os.path.dirname(file_path), exist_ok=True)
@@ -341,9 +401,9 @@ class MetaReviewsExtractor:
 
                     for file_type, file_path in output_files.items():
                         if file_type == 'excel':
-                            self._save_to_excel(data, file_path)
+                            self._save_to_excel(url, data, file_path)
                         elif file_type == 'json':
-                            self._save_to_json(data, file_path)
+                            self._save_to_json(url, data, file_path)
                         else:
                             raise ValueError(f"Unsupported file type: {file_type}")
 
@@ -351,11 +411,13 @@ class MetaReviewsExtractor:
                     # Release the lock
                     msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
         except Exception as e:
-            print(f"Error saving data to files: {str(e)}")
+            logger.info(f"Error saving data to files: {str(e)}")
             raise
 
-    def _save_to_excel(self, data, file_path):
+    def _save_to_excel(self,url, data, file_path):
         """Save DataFrame to Excel"""
+        game_id = url.split('/')[-1].split('?')[0]
+        logger = self.setup_logger(game_id)
         try:
             existing_df = pd.read_excel(file_path) if os.path.exists(file_path) else pd.DataFrame()
 
@@ -373,11 +435,13 @@ class MetaReviewsExtractor:
                 combined_df.to_excel(writer, index=False, header=True, sheet_name='Data')
 
         except Exception as e:
-            print(f"Error saving to Excel: {str(e)}")
+            logger.info(f"Error saving to Excel: {str(e)}")
             raise
 
-    def _save_to_json(self, data, file_path):
+    def _save_to_json(self,url, data, file_path):
         """Save DataFrame to JSON"""
+        game_id = url.split('/')[-1].split('?')[0]
+        logger = self.setup_logger(game_id)
         try:
             existing_data = []
             if os.path.exists(file_path):
@@ -392,7 +456,7 @@ class MetaReviewsExtractor:
                 json.dump(combined_data, f, indent=2)
 
         except Exception as e:
-            print(f"Error saving to JSON: {str(e)}")
+            logger.info(f"Error saving to JSON: {str(e)}")
             raise
 
     def _save_to_txt(self, data, file_path):
