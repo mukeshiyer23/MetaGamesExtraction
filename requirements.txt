@@ -2,3 +2,5 @@ numpy
 pandas
 selenium
 openpyxl
+keyboard
+pyautogui
